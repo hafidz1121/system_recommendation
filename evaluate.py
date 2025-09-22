@@ -54,33 +54,50 @@ ratings_query = "SELECT customer_id, menu_id, rating FROM menu_rating WHERE dele
 ratings_data = pd.read_sql(ratings_query, db_engine)
 if not ratings_data.empty:
     ratings_data['weight'] = ratings_data['rating'] / 5.0
+    ratings_data['interaction_type'] = 'rating'
     ratings_data.drop(columns=['rating'], inplace=True)
 
 favorites_query = "SELECT customer_id, menu_id FROM favorite_menu"
 favorites_data = pd.read_sql(favorites_query, db_engine)
 if not favorites_data.empty:
     favorites_data['weight'] = 1.0
+    favorites_data['interaction_type'] = 'favorite'
 
 purchase_query = "SELECT t.customer_id, td.menu_id FROM transaction_detail td JOIN transaction t ON td.transaction_id = t.id WHERE t.status = 'done' AND t.deleted_at IS NULL"
 purchase_data = pd.read_sql(purchase_query, db_engine)
 if not purchase_data.empty:
     purchase_data['weight'] = 0.9
+    purchase_data['interaction_type'] = 'checkout'
 
 implicit_query = "SELECT customer_id, menu_id, interaction_type FROM customer_interactions WHERE menu_id IS NOT NULL AND interaction_type IN ('view_detail_menu', 'add_to_cart')"
 implicit_data = pd.read_sql(implicit_query, db_engine)
 if not implicit_data.empty:
     implicit_data['weight'] = implicit_data['interaction_type'].map({'add_to_cart': 0.6, 'view_detail_menu': 0.4})
+    # Hapus kolom interaction_type asli agar tidak duplikat
+    implicit_data.drop(columns=['interaction_type'], inplace=True)
 
-# Menggabungkan semua interaksi, memprioritaskan yang berbobot tertinggi.
-all_interactions = [ratings_data, favorites_data, purchase_data, implicit_data]
+# Tambahkan kolom interaction_type ke DataFrame lain agar bisa digabung
+if not ratings_data.empty: ratings_data['interaction_type'] = 'rating'
+if not favorites_data.empty: favorites_data['interaction_type'] = 'favorite'
+if not purchase_data.empty: purchase_data['interaction_type'] = 'checkout'
+
+# Untuk implicit, kita buat kolomnya dari mapping
+if not implicit_data.empty:
+    implicit_data_copy = implicit_data.copy()
+    implicit_data_copy['interaction_type'] = implicit_data_copy['weight'].map({0.6: 'add_to_cart', 0.4: 'view_detail_menu'})
+    all_interactions = [ratings_data, favorites_data, purchase_data, implicit_data_copy]
+else:
+    all_interactions = [ratings_data, favorites_data, purchase_data]
+
 valid_interactions = [df for df in all_interactions if not df.empty and 'weight' in df.columns]
 if not valid_interactions:
     print("\nPROSES DIHENTIKAN: Tidak ada data interaksi valid.")
     exit()
+interactions_df_with_types = pd.concat(valid_interactions, ignore_index=True)
+interactions_df_with_types.dropna(subset=['customer_id', 'menu_id', 'weight'], inplace=True)
 
-interactions_df = pd.concat(valid_interactions, ignore_index=True)
-interactions_df.dropna(subset=['customer_id', 'menu_id', 'weight'], inplace=True)
-interactions_df = interactions_df.sort_values(by='weight', ascending=False).drop_duplicates(subset=['customer_id', 'menu_id'], keep='first')
+# Simpan data dengan tipe interaksi untuk analisis nanti
+interactions_df = interactions_df_with_types.sort_values(by='weight', ascending=False).drop_duplicates(subset=['customer_id', 'menu_id'], keep='first')
 print(f"Semua data interaksi berhasil dimuat. Total interaksi unik: {len(interactions_df)}")
 
 # --- Bagian 3: Analisis Threshold & Persiapan Model ---
@@ -302,5 +319,32 @@ for p in ax.patches:
 plt.tight_layout()
 plt.savefig(os.path.join(output_folder, 'perbandingan_metrik.png'))
 print(f"Grafik '{os.path.join(output_folder, 'perbandingan_metrik.png')}' telah disimpan.")
+
+# --- Popularitas Kantin ---
+# Gabungkan interaksi dengan menu untuk mendapatkan nama kantin
+interactions_with_canteen = pd.merge(interactions_df_with_types, menu_df[['id', 'canteen_name']], left_on='menu_id', right_on='id')
+canteen_popularity = interactions_with_canteen['canteen_name'].value_counts().head(10)
+
+plt.figure(figsize=(12, 7))
+sns.barplot(x=canteen_popularity.values, y=canteen_popularity.index, palette='rocket')
+plt.title('Top 10 Kantin Terpopuler Berdasarkan Jumlah Interaksi', fontsize=16)
+plt.xlabel('Jumlah Total Interaksi', fontsize=12)
+plt.ylabel('Nama Kantin', fontsize=12)
+plt.tight_layout()
+plt.savefig(os.path.join(output_folder, 'popularitas_kantin.png'))
+print(f"Grafik '{os.path.join(output_folder, 'popularitas_kantin.png')}' telah disimpan.")
+
+
+# --- Distribusi Jenis Interaksi ---
+interaction_type_counts = interactions_df['interaction_type'].value_counts()
+
+plt.figure(figsize=(10, 8))
+plt.pie(interaction_type_counts, labels=interaction_type_counts.index, autopct='%1.1f%%', startangle=140,
+        colors=sns.color_palette('YlGnBu'))
+plt.title('Distribusi Jenis Interaksi Pengguna', fontsize=16)
+plt.ylabel('') # Hapus label y yang tidak perlu
+plt.savefig(os.path.join(output_folder, 'distribusi_jenis_interaksi.png'))
+print(f"Grafik '{os.path.join(output_folder, 'distribusi_jenis_interaksi.png')}' telah disimpan.")
+
 
 print("\n--- Semua Proses Selesai ---")

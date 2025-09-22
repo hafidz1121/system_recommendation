@@ -51,7 +51,7 @@ except Exception as e:
     exit()
 
 # --- 3. DEFINISI PERSONA & KONFIGURASI SIMULASI ---
-TOTAL_USERS_TO_SIMULATE = 20
+TOTAL_USERS_TO_SIMULATE = 100
 personas = {
     "snacker": {
         "interaction_range": (15, 25),
@@ -71,8 +71,10 @@ personas = {
 print(f"Memulai generasi data untuk {TOTAL_USERS_TO_SIMULATE} pengguna...")
 all_new_ratings = []
 all_new_favorites = []
+all_new_implicit = []
 
 users_to_simulate = random.sample(customer_ids, min(TOTAL_USERS_TO_SIMULATE, len(customer_ids)))
+
 
 for customer_id in users_to_simulate:
     persona_name = random.choice(list(personas.keys()))
@@ -100,7 +102,25 @@ for customer_id in users_to_simulate:
         menus_to_interact = [menu_df.sample(1).iloc[0] for _ in range(num_interactions)]
 
     for menu in menus_to_interact:
-        if random.random() < 0.7:
+        # 1. Selalu ada interaksi 'view_detail_menu'
+        all_new_implicit.append({
+            'id': str(uuid.uuid4()),
+            'customer_id': customer_id,
+            'menu_id': menu['id'],
+            'interaction_type': 'view_detail_menu'
+        })
+        
+        # 2. Kemungkinan 50% pengguna menambahkan ke keranjang setelah melihat
+        if random.random() < 0.5:
+            all_new_implicit.append({
+                'id': str(uuid.uuid4()),
+                'customer_id': customer_id,
+                'menu_id': menu['id'],
+                'interaction_type': 'add_to_cart'
+            })
+            
+        # 3. Kemungkinan terpisah untuk memberi rating atau favorit
+        if random.random() < 0.7: # 70% chance to rate
             all_new_ratings.append({
                 'id': str(uuid.uuid4()),
                 'customer_id': customer_id,
@@ -109,8 +129,8 @@ for customer_id in users_to_simulate:
                 'comment': '',
                 'transaction_detail_id': str(uuid.uuid4())
             })
-        else:
-            all_new_favorites.append({
+        elif random.random() < 0.5: # 50% chance of the remaining to favorite
+             all_new_favorites.append({
                 'id': str(uuid.uuid4()),
                 'customer_id': customer_id,
                 'menu_id': menu['id'],
@@ -138,6 +158,14 @@ if all_new_favorites:
         favorites_df.to_sql('favorite_menu', db_engine, if_exists='append', index=False)
     except Exception as e:
         print(f"Gagal menyimpan favorites: {e}")
-    
+        
+if all_new_implicit:
+    implicit_df = pd.DataFrame(all_new_implicit).drop_duplicates(subset=['customer_id', 'menu_id', 'interaction_type'])
+    print(f"Menyimpan {len(implicit_df)} data interaksi implisit baru ke database...")
+    try:
+        implicit_df.to_sql('customer_interactions', db_engine, if_exists='append', index=False)
+    except Exception as e:
+        print(f"Gagal menyimpan interaksi implisit: {e}")
+
 print("\n--- Simulasi Selesai ---")
 print("Database Anda sekarang memiliki data interaksi baru. Anda siap untuk menjalankan 'evaluate.py'.")
